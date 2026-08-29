@@ -1641,7 +1641,7 @@ describe("ACPAgentSession Zed parity", () => {
 });
 
 describe("deriveModelDefinitionsFromACP", () => {
-  test("attaches shared thinking options to ACP model state", () => {
+  test("attaches session thinking options only to the session's current model", () => {
     const result = deriveModelDefinitionsFromACP(
       "claude-acp",
       {
@@ -1700,35 +1700,12 @@ describe("deriveModelDefinitionsFromACP", () => {
         defaultThinkingOptionId: "medium",
       },
       {
+        // Not the current model: ACP never advertised thinking for it, so it carries none.
         provider: "claude-acp",
         id: "sonnet",
         label: "Sonnet",
         description: "Balanced",
         isDefault: false,
-        thinkingOptions: [
-          {
-            id: "low",
-            label: "Low",
-            description: undefined,
-            isDefault: false,
-            metadata: undefined,
-          },
-          {
-            id: "medium",
-            label: "Medium",
-            description: undefined,
-            isDefault: true,
-            metadata: undefined,
-          },
-          {
-            id: "high",
-            label: "High",
-            description: undefined,
-            isDefault: false,
-            metadata: undefined,
-          },
-        ],
-        defaultThinkingOptionId: "medium",
       },
     ]);
   });
@@ -3788,5 +3765,169 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
       cwd: "/tmp/paseo-acp-test",
       mcpServers: [],
     });
+  });
+});
+
+describe("ACP thinking capability is never inferred across models", () => {
+  const thoughtLevel = {
+    id: "reasoning",
+    name: "Reasoning",
+    category: "thought_level" as const,
+    type: "select" as const,
+    currentValue: "medium",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "medium", name: "Medium" },
+    ],
+  };
+
+  test("a model in a session with no thought_level receives no thinking options", () => {
+    // A provider whose session exposes a model selector but no thought_level: the agent
+    // rejects a thinking write outright with "Unknown model config option: thinking".
+    const result = deriveModelDefinitionsFromACP(
+      "acp-provider",
+      {
+        availableModels: [{ modelId: "model-a", name: "Model A", description: null }],
+        currentModelId: "model-a",
+      },
+      [],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.thinkingOptions).toBeUndefined();
+    expect(result[0]?.defaultThinkingOptionId).toBeUndefined();
+  });
+
+  test("capability from the current model does not leak onto a sibling model", () => {
+    const result = deriveModelDefinitionsFromACP(
+      "acp-provider",
+      {
+        availableModels: [
+          { modelId: "thinker", name: "Thinker", description: null },
+          { modelId: "non-thinker", name: "Non Thinker", description: null },
+        ],
+        currentModelId: "thinker",
+      },
+      [thoughtLevel],
+    );
+
+    const thinker = result.find((model) => model.id === "thinker");
+    const sibling = result.find((model) => model.id === "non-thinker");
+
+    expect(thinker?.thinkingOptions).toHaveLength(2);
+    expect(thinker?.defaultThinkingOptionId).toBe("medium");
+    expect(sibling?.thinkingOptions).toBeUndefined();
+    expect(sibling?.defaultThinkingOptionId).toBeUndefined();
+  });
+
+  test("a model that advertises thought_level keeps its valid options", () => {
+    const result = deriveModelDefinitionsFromACP(
+      "acp-provider",
+      {
+        availableModels: [{ modelId: "thinker", name: "Thinker", description: null }],
+        currentModelId: "thinker",
+      },
+      [thoughtLevel],
+    );
+
+    expect(result[0]?.thinkingOptions?.map((option) => option.id)).toEqual(["low", "medium"]);
+    expect(result[0]?.defaultThinkingOptionId).toBe("medium");
+  });
+
+  test("changing the current model recomputes which model carries thinking", () => {
+    const availableModels = [
+      { modelId: "model-a", name: "Model A", description: null },
+      { modelId: "model-b", name: "Model B", description: null },
+    ];
+
+    const onA = deriveModelDefinitionsFromACP(
+      "acp-provider",
+      { availableModels, currentModelId: "model-a" },
+      [thoughtLevel],
+    );
+    const onB = deriveModelDefinitionsFromACP(
+      "acp-provider",
+      { availableModels, currentModelId: "model-b" },
+      [thoughtLevel],
+    );
+
+    expect(onA.find((model) => model.id === "model-a")?.thinkingOptions).toHaveLength(2);
+    expect(onA.find((model) => model.id === "model-b")?.thinkingOptions).toBeUndefined();
+    expect(onB.find((model) => model.id === "model-b")?.thinkingOptions).toHaveLength(2);
+    expect(onB.find((model) => model.id === "model-a")?.thinkingOptions).toBeUndefined();
+  });
+
+  test("the config-option model branch also confines thinking to the current model", () => {
+    const result = deriveModelDefinitionsFromACP("acp-provider", null, [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "current",
+        options: [
+          { value: "current", name: "Current" },
+          { value: "other", name: "Other" },
+        ],
+      },
+      thoughtLevel,
+    ]);
+
+    expect(result.find((model) => model.id === "current")?.thinkingOptions).toHaveLength(2);
+    expect(result.find((model) => model.id === "other")?.thinkingOptions).toBeUndefined();
+  });
+
+  test.each([
+    ["null config options", null],
+    ["undefined config options", undefined],
+    ["empty config options", []],
+    [
+      "a thought_level option with no choices",
+      [{ ...thoughtLevel, options: [] as { value: string; name: string }[] }],
+    ],
+  ])("fails closed for %s", (_label, configOptions) => {
+    const result = deriveModelDefinitionsFromACP(
+      "acp-provider",
+      {
+        availableModels: [{ modelId: "model-a", name: "Model A", description: null }],
+        currentModelId: "model-a",
+      },
+      configOptions as Parameters<typeof deriveModelDefinitionsFromACP>[2],
+    );
+
+    expect(result[0]?.thinkingOptions).toBeUndefined();
+    expect(result[0]?.defaultThinkingOptionId).toBeUndefined();
+  });
+
+  test("no model carries thinking when the session reports no current model", () => {
+    const result = deriveModelDefinitionsFromACP(
+      "acp-provider",
+      {
+        availableModels: [
+          { modelId: "model-a", name: "Model A", description: null },
+          { modelId: "model-b", name: "Model B", description: null },
+        ],
+        currentModelId: undefined as unknown as string,
+      },
+      [thoughtLevel],
+    );
+
+    for (const model of result) {
+      expect(model.thinkingOptions).toBeUndefined();
+    }
+  });
+
+  test("a session without thought_level cannot emit a thinking config write", async () => {
+    const session = createSession();
+    const internals = asInternals<ACPModelSelectionInternals>(session);
+    const setSessionConfigOption = vi.fn(async () => ({ configOptions: [] }));
+    internals.sessionId = "session-1";
+    internals.configOptions = [selectConfigOption("model", ["model-a"], "model-a")];
+    internals.connection = { setSessionConfigOption };
+
+    await expect(session.setThinkingOption("medium")).rejects.toThrow(
+      /does not expose ACP thought-level selection/,
+    );
+    expect(setSessionConfigOption).not.toHaveBeenCalled();
   });
 });

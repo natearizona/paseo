@@ -686,32 +686,61 @@ export function deriveModelDefinitionsFromACP(
   models: SessionModelState | null | undefined,
   configOptions?: SessionConfigOption[] | null,
 ): AgentModelDefinition[] {
-  const thinkingOptions = deriveSelectorOptions(configOptions, "thought_level");
-  const defaultThinkingOptionId = thinkingOptions.find((option) => option.isDefault)?.id ?? null;
+  // Session config options describe the session as it is configured right now, so they
+  // describe the model the session reports as current. ACP's ModelInfo carries no
+  // capability fields (only modelId/name/description/_meta, and _meta is explicitly not
+  // interpretable), so per-model support simply cannot be read off a session response.
+  // Copying a session-scoped thought_level onto every model therefore asserts a
+  // capability the agent never advertised: a session listing several models can expose
+  // thinking because its *current* model supports it, while a sibling model rejects the
+  // option outright ("Unknown model config option: thinking") or accepts the option but
+  // not the session's value ("Invalid value for thinking: ...").
+  //
+  // Only the current model is entitled to what the session reports. For every other
+  // model the capability is unknown, and unknown means unavailable. Providers that need
+  // per-model truth supply a catalogModelResolver, which probes each model and overwrites
+  // these values.
+  const sessionThinkingOptions = deriveSelectorOptions(configOptions, "thought_level");
+  const sessionDefaultThinkingOptionId =
+    sessionThinkingOptions.find((option) => option.isDefault)?.id ?? null;
+
+  const hasSessionThinking = sessionThinkingOptions.length > 0;
+  const thinkingOptionsFor = (isCurrentModel: boolean): ConfigOptionSelector[] | undefined =>
+    isCurrentModel && hasSessionThinking ? sessionThinkingOptions : undefined;
+  const defaultThinkingOptionIdFor = (isCurrentModel: boolean): string | undefined =>
+    isCurrentModel && hasSessionThinking
+      ? (sessionDefaultThinkingOptionId ?? undefined)
+      : undefined;
 
   if (models?.availableModels?.length) {
-    return models.availableModels.map((model) => ({
-      provider,
-      id: model.modelId,
-      label: model.name,
-      description: model.description ?? undefined,
-      isDefault: model.modelId === models.currentModelId,
-      thinkingOptions: thinkingOptions.length > 0 ? thinkingOptions : undefined,
-      defaultThinkingOptionId: defaultThinkingOptionId ?? undefined,
-    }));
+    return models.availableModels.map((model) => {
+      const isCurrentModel = model.modelId === models.currentModelId;
+      return {
+        provider,
+        id: model.modelId,
+        label: model.name,
+        description: model.description ?? undefined,
+        isDefault: isCurrentModel,
+        thinkingOptions: thinkingOptionsFor(isCurrentModel),
+        defaultThinkingOptionId: defaultThinkingOptionIdFor(isCurrentModel),
+      };
+    });
   }
 
   const modelOptions = deriveSelectorOptions(configOptions, "model");
-  return modelOptions.map((option) => ({
-    provider,
-    id: option.id,
-    label: option.label,
-    description: option.description,
-    isDefault: option.isDefault,
-    thinkingOptions: thinkingOptions.length > 0 ? thinkingOptions : undefined,
-    defaultThinkingOptionId: defaultThinkingOptionId ?? undefined,
-    metadata: option.metadata,
-  }));
+  return modelOptions.map((option) => {
+    const isCurrentModel = Boolean(option.isDefault);
+    return {
+      provider,
+      id: option.id,
+      label: option.label,
+      description: option.description,
+      isDefault: option.isDefault,
+      thinkingOptions: thinkingOptionsFor(isCurrentModel),
+      defaultThinkingOptionId: defaultThinkingOptionIdFor(isCurrentModel),
+      metadata: option.metadata,
+    };
+  });
 }
 
 export function deriveFeaturesFromACP(
