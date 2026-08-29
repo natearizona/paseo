@@ -585,6 +585,7 @@ export interface ACPProviderModeWriterContext {
   currentModeId: string | null;
   selection: ACPModeSelection;
   configOptions: SessionConfigOption[];
+  runRequest: <T>(request: () => Promise<T>) => Promise<T>;
   logger: Logger;
 }
 
@@ -1833,7 +1834,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     if (selection.hasAvailableModes) {
-      await this.connection.setSessionMode({ sessionId: this.sessionId, modeId });
+      const connection = this.connection;
+      const sessionId = this.sessionId;
+      await this.runACPRequest(() => connection.setSessionMode({ sessionId, modeId }));
       this.currentMode = modeId;
       this.pushEvent({
         type: "mode_changed",
@@ -1849,11 +1852,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       throw new Error(`${this.provider} does not expose ACP mode switching`);
     }
 
-    const response = await this.connection.setSessionConfigOption({
-      sessionId: this.sessionId,
-      configId: modeOption.id,
-      value: modeId,
-    });
+    const connection = this.connection;
+    const sessionId = this.sessionId;
+    const response = await this.runACPRequest(() =>
+      connection.setSessionConfigOption({
+        sessionId,
+        configId: modeOption.id,
+        value: modeId,
+      }),
+    );
     this.currentMode = this.applyConfigOptionResponse({
       response,
       configId: modeOption.id,
@@ -1884,6 +1891,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       currentModeId: this.currentMode,
       selection,
       configOptions: this.configOptions,
+      runRequest: (request) => this.runACPRequest(request),
       logger: this.logger,
     };
   }
@@ -1927,15 +1935,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         return;
       }
 
-      if (typeof this.connection.unstable_setSessionModel !== "function") {
+      const connection = this.connection;
+      const sessionId = this.sessionId;
+      if (typeof connection.unstable_setSessionModel !== "function") {
         throw new Error(this.modelSelectionUnavailableMessage());
       }
+      const setSessionModel = connection.unstable_setSessionModel.bind(connection);
 
       try {
-        await this.connection.unstable_setSessionModel({
-          sessionId: this.sessionId,
-          modelId,
-        });
+        await this.runACPRequest(() => setSessionModel({ sessionId, modelId }));
         this.currentModel = modelId;
         this.pushEvent({
           type: "model_changed",
@@ -1964,11 +1972,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       return;
     }
 
-    const response = await this.connection.setSessionConfigOption({
-      sessionId: this.sessionId,
-      configId: modelOption.id,
-      value: modelId,
-    });
+    const modelConnection = this.connection;
+    const modelSessionId = this.sessionId;
+    const response = await this.runACPRequest(() =>
+      modelConnection.setSessionConfigOption({
+        sessionId: modelSessionId,
+        configId: modelOption.id,
+        value: modelId,
+      }),
+    );
     this.currentModel = this.applyConfigOptionResponse({
       response,
       configId: modelOption.id,
@@ -2010,11 +2022,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!option) {
       throw new Error(`${this.provider} does not expose ACP thought-level selection`);
     }
-    const response = await this.connection.setSessionConfigOption({
-      sessionId: this.sessionId,
-      configId: option.id,
-      value: thinkingOptionId,
-    });
+    const thinkingConnection = this.connection;
+    const thinkingSessionId = this.sessionId;
+    const response = await this.runACPRequest(() =>
+      thinkingConnection.setSessionConfigOption({
+        sessionId: thinkingSessionId,
+        configId: option.id,
+        value: thinkingOptionId,
+      }),
+    );
     this.thinkingOptionId = this.applyConfigOptionResponse({
       response,
       configId: option.id,
@@ -2060,11 +2076,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       );
     }
 
-    const response = await this.connection.setSessionConfigOption({
-      sessionId: this.sessionId,
-      configId: option.id,
-      value: requestedValue,
-    });
+    const featureConnection = this.connection;
+    const featureSessionId = this.sessionId;
+    const response = await this.runACPRequest(() =>
+      featureConnection.setSessionConfigOption({
+        sessionId: featureSessionId,
+        configId: option.id,
+        value: requestedValue,
+      }),
+    );
     const currentValue = this.applyConfigOptionResponse({
       response,
       configId: option.id,

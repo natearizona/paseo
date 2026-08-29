@@ -3790,3 +3790,79 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
     });
   });
 });
+
+describe("ACP config writes normalize structured provider rejections", () => {
+  // Shape captured from a live ACP provider: JSON-RPC failures reject with a plain
+  // object, not an Error, and the only actionable text sits in data.message. Without
+  // runACPRequest these reach callers raw and stringify to "[object Object]".
+  function rejectWith(detail: string): ReturnType<typeof vi.fn> {
+    return vi.fn(async () => {
+      throw {
+        type: "Object",
+        message: "Invalid params",
+        stack: "",
+        code: -32602,
+        data: { type: "Object", message: detail, stack: "" },
+      };
+    });
+  }
+
+  test("setMode surfaces the provider's rejection detail", async () => {
+    const session = createSession();
+    const internals = asInternals<ACPModelSelectionInternals>(session);
+    internals.sessionId = "session-1";
+    internals.configOptions = [selectConfigOption("mode", ["ask", "default"], "ask")];
+    internals.connection = {
+      setSessionConfigOption: rejectWith("Unknown model config option: mode"),
+    };
+
+    await expect(session.setMode("default")).rejects.toThrow(
+      "Invalid params: Unknown model config option: mode",
+    );
+  });
+
+  test("setModel surfaces the provider's rejection detail", async () => {
+    const session = createSession();
+    const internals = asInternals<ACPModelSelectionInternals>(session);
+    internals.sessionId = "session-1";
+    internals.configOptions = [selectConfigOption("model", ["grok-4.6", "sonnet"], "sonnet")];
+    internals.connection = {
+      setSessionConfigOption: rejectWith("Unknown model config option: model"),
+    };
+
+    await expect(session.setModel("grok-4.6")).rejects.toThrow(
+      "Invalid params: Unknown model config option: model",
+    );
+  });
+
+  test("setThinkingOption surfaces the provider's rejection detail", async () => {
+    const session = createSession();
+    const internals = asInternals<ACPModelSelectionInternals>(session);
+    internals.sessionId = "session-1";
+    internals.configOptions = [selectConfigOption("thought_level", ["low", "high"], "low")];
+    internals.connection = {
+      setSessionConfigOption: rejectWith("Unknown model config option: thinking"),
+    };
+
+    await expect(session.setThinkingOption("high")).rejects.toThrow(
+      "Invalid params: Unknown model config option: thinking",
+    );
+  });
+
+  test("a rejection reaches the caller as a normalized Error, not a raw object", async () => {
+    const session = createSession();
+    const internals = asInternals<ACPModelSelectionInternals>(session);
+    internals.sessionId = "session-1";
+    internals.configOptions = [selectConfigOption("thought_level", ["low", "high"], "low")];
+    internals.connection = {
+      setSessionConfigOption: rejectWith("Invalid value for thinking: xhigh"),
+    };
+
+    // Unwrapped, the raw JSON-RPC object propagates; only an Error carries the detail
+    // through callers that render error.message.
+    await expect(session.setThinkingOption("high")).rejects.toBeInstanceOf(Error);
+    await expect(session.setThinkingOption("high")).rejects.toThrow(
+      "Invalid params: Invalid value for thinking: xhigh",
+    );
+  });
+});

@@ -209,11 +209,13 @@ export async function writeCopilotProviderMode(
   if (!requestsAllowAll) {
     return { handled: false };
   }
-  const response = await context.connection.setSessionConfigOption({
-    sessionId: context.sessionId,
-    configId: COPILOT_ALLOW_ALL_CONFIG_ID,
-    value: COPILOT_ALLOW_ALL_ON,
-  });
+  const response = await context.runRequest(() =>
+    context.connection.setSessionConfigOption({
+      sessionId: context.sessionId,
+      configId: COPILOT_ALLOW_ALL_CONFIG_ID,
+      value: COPILOT_ALLOW_ALL_ON,
+    }),
+  );
   return {
     handled: true,
     currentModeId: COPILOT_ALLOW_ALL_MODE_ID,
@@ -230,11 +232,13 @@ export async function beforeCopilotModeWriter(
   ) {
     return {};
   }
-  const response = await context.connection.setSessionConfigOption({
-    sessionId: context.sessionId,
-    configId: COPILOT_ALLOW_ALL_CONFIG_ID,
-    value: COPILOT_ALLOW_ALL_OFF,
-  });
+  const response = await context.runRequest(() =>
+    context.connection.setSessionConfigOption({
+      sessionId: context.sessionId,
+      configId: COPILOT_ALLOW_ALL_CONFIG_ID,
+      value: COPILOT_ALLOW_ALL_OFF,
+    }),
+  );
   return { configOptions: response.configOptions };
 }
 
